@@ -68,12 +68,22 @@ def load_token(path: Path = CREDS_PATH, now: float | None = None) -> tuple[str, 
     return token, str(oauth.get("subscriptionType") or "")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib copies the Authorization header onto redirects, even to other hosts. Never follow one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # the 3xx then surfaces as an HTTPError
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def fetch(token: str) -> dict:
     req = urllib.request.Request(USAGE_URL, headers={
         "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
         "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with _opener.open(req, timeout=TIMEOUT) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):

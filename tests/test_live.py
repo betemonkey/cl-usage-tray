@@ -59,3 +59,31 @@ def test_details_opens_where_the_card_was():
     assert place_near(card, (720, 760), work)[0] + 720 <= 2560 - 12
     assert place_near((2500, 1300, 2560, 1380), (720, 760), work) == (2560 - 720 - 12, 1380 - 760 - 12)  # clamped
     assert place_near((10, 10, 50, 50), (720, 760), work) == (12, 12)  # never off the top-left either
+
+
+def test_token_never_follows_a_redirect():
+    """A redirect must fail, not carry the Authorization header to another host."""
+    import http.server, threading
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get("Authorization")))
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/usage"
+        old, live.USAGE_URL = live.USAGE_URL, url
+        with pytest.raises(live.LiveError, match="HTTP 302"):
+            live.fetch("secret-token")
+    finally:
+        live.USAGE_URL = old
+        srv.shutdown()
+    assert seen == [("/usage", "Bearer secret-token")]  # the redirect target was never requested
