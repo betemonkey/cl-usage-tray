@@ -4,7 +4,7 @@ from __future__ import annotations
 from PIL import Image, ImageDraw, ImageFont
 
 SIZE = 64
-GREEN, YELLOW, RED, LOCK, TRACK = "#2e9e4f", "#e0a800", "#d13438", "#6b3fa0", "#5a5a5a"
+GREEN, YELLOW, RED, TRACK = "#0ca30c", "#fab219", "#d03b3b", "#5a5a5a"  # same status colours as the UI
 
 
 def color_for(pct: float, yellow_at: float = 60, red_at: float = 85) -> str:
@@ -36,10 +36,10 @@ def ring_icon(pct: float, yellow_at: float = 60, red_at: float = 85) -> Image.Im
 
 
 def lock_icon(seconds_left: float) -> Image.Image:
-    """Full purple disc with the time left until reset (e.g. '2h', '45m')."""
+    """Solid red disc with the time left until reset (e.g. '2h', '45m')."""
     img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.ellipse((1, 1, SIZE - 1, SIZE - 1), fill=LOCK)
+    d.ellipse((1, 1, SIZE - 1, SIZE - 1), fill=RED)
     m = max(0, int(seconds_left // 60))
     text = f"{round(m / 60)}h" if m >= 90 else f"{m}m"
     font = _font(30 if len(text) <= 2 else 24)

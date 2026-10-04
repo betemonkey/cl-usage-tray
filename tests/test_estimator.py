@@ -97,6 +97,7 @@ def test_status_percent_and_live_context():
     st = est.compute_status(calls, [], cal, est.DEFAULT_PRICES, now=T0 + 120)
     assert st.pct == pytest.approx((5 + 0.02 + 0.1 + 0.16) / 10 * 100)
     assert st.live_context == 520_000 and st.live_folder == "beta"
+    assert st.live == [("beta", 520_000), ("alpha", 100_000)]
     assert st.reset_at - st.window_start == 5 * H
     assert not st.locked
 
@@ -132,7 +133,7 @@ def test_today_total_uses_timezone():
 
 def test_tooltip_is_short_and_labelled_estimate():
     st = est.Status(pct=42, window_start=T0, reset_at=T0 + 5 * H, today_tokens=10**9,
-                    live_context=999_999, live_folder="x" * 80)
+                    live=[("x" * 80, 999_999)])
     text = est.tooltip(st, T0)
     assert len(text) <= 127
     assert "estimate" in text
@@ -150,3 +151,61 @@ def test_monitor_on_fixture_logs(tmp_path):
     assert list(mon.samples) == [1791108000]
     assert set(mon.samples[1791108000].tokens) == {OPUS, "claude-haiku-4-5-20251001"}
     assert st.window_tokens["output"] == 400 + 600 + 200
+
+
+# ---- weekly limits and claude.ai readings
+
+BRU = ZoneInfo("Europe/Brussels")
+
+
+def test_week_start_is_last_monday_8am_local():
+    sat = parse_ts("2026-10-03T12:00:00Z")
+    assert est.week_start(sat, BRU) == parse_ts("2026-09-28T06:00:00Z")  # Monday 08:00 CEST
+    mon_early = parse_ts("2026-09-28T05:00:00Z")  # Monday 07:00 local, before the reset
+    assert est.week_start(mon_early, BRU) == parse_ts("2026-09-21T06:00:00Z")
+    after_dst = parse_ts("2026-10-27T12:00:00Z")  # Tuesday after the switch to CET
+    assert est.week_start(after_dst, BRU) == parse_ts("2026-10-26T07:00:00Z")
+
+
+def test_limit_from_reading():
+    assert est.limit_from_reading(30.0, 60) == pytest.approx(50.0)
+    assert est.limit_from_reading(30.0, 1) is None  # too little to scale from
+    assert est.limit_from_reading(0.0, 50) is None
+
+
+def test_weekly_and_fable_pct_from_limits():
+    now = parse_ts("2026-10-03T12:00:00Z")
+    calls = [call(now - 3600, out=1_000_000),                                         # opus $20
+             call(now - 7200, out=1_000_000, model="claude-fable-5-1"),               # fable $50
+             call(parse_ts("2026-09-27T12:00:00Z"), out=9_000_000)]                   # last week
+    st = est.compute_status(calls, [], est.Calibration(), est.DEFAULT_PRICES, now, BRU,
+                            week_limits={"week": 140.0})
+    assert st.week.cost == pytest.approx(70) and st.week.pct == pytest.approx(50)
+    assert st.fable.cost == pytest.approx(50) and st.fable.pct is None  # not matched yet
+    assert st.week.reset_at == parse_ts("2026-10-05T06:00:00Z")
+
+
+def test_monitor_match_sets_limits_from_claude_ai(tmp_path):
+    shutil.copytree(FIXTURES, tmp_path / "projects")
+    cfg = {**DEFAULTS, "timezone": "UTC"}
+    mon = Monitor(cfg, store=LogStore(tmp_path / "projects"), samples={}, readings={}, persist=False)
+    now = parse_ts("2026-10-04T08:30:00Z")
+    mon.refresh(now=now)
+    done = mon.match(session=50, week=20, fable=None, now=now)
+    assert done == ["session", "week"]
+    assert mon.status.pct == pytest.approx(50)
+    assert mon.status.week.pct == pytest.approx(20)
+    assert mon.status.calibration.source == "claude.ai"
+
+
+def test_card_rows():
+    from usage_tray.ui import limit_rows
+    st = est.Status(pct=64, window_start=T0, reset_at=T0 + 2 * H,
+                    week=est.Weekly(reset_at=T0 + 86400, cost=10, pct=88), fable=est.Weekly(reset_at=T0 + 86400))
+    rows = limit_rows(st, T0)
+    assert [r["name"] for r in rows] == ["Current session", "This week", "Fable this week"]
+    assert rows[0]["value"] == "64% used" and rows[0]["sev"] == "warn" and "in 2h 00m" in rows[0]["sub"]
+    assert rows[1]["sev"] == "crit"
+    assert rows[2]["pct"] is None and rows[2]["value"] == "Not set"
+    locked = limit_rows(est.Status(locked=True, reset_at=T0 + 600), T0)
+    assert locked[0]["value"] == "Locked" and locked[0]["sev"] == "crit"

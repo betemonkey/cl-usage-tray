@@ -10,6 +10,7 @@ from .estimator import DEFAULT_PRICES, Sample
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "usage-tray"
 CONFIG_FILE = APP_DIR / "config.json"
 SAMPLES_FILE = APP_DIR / "lockouts.json"
+READINGS_FILE = APP_DIR / "readings.json"
 
 DEFAULTS = {
     "poll_seconds": 30,
@@ -22,6 +23,8 @@ DEFAULTS = {
     "multipliers": None,        # e.g. {"cache_read": 0.5} to pin them; null = auto-fit
     "limit": None,              # weighted cost that equals 100%; null = auto-fit
     "exclude_lockouts": [],     # resetsAt values (unix seconds) to leave out of the fit
+    "week_reset": [0, 8],       # weekly limits reset on this weekday (0 = Monday) and hour, local time
+    "hover_card": True,         # false = plain Windows tooltip instead of the hover card
 }
 
 
@@ -53,4 +56,19 @@ def save_samples(samples: dict[float, Sample], path: Path = SAMPLES_FILE) -> Non
             for s in sorted(samples.values(), key=lambda s: s.resets_at)]
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def load_readings(path: Path = READINGS_FILE) -> dict:
+    """Limits derived from claude.ai readings: {"session"|"week"|"fable": {"limit", "pct", "at"}}."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_readings(readings: dict, path: Path = READINGS_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(readings, indent=1), encoding="utf-8")
     os.replace(tmp, path)

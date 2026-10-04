@@ -12,7 +12,7 @@ import math
 import os
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from .parser import Call, Lockout
@@ -114,6 +114,7 @@ class Calibration:
     samples: int = 0
     spread: float = 0.0   # relative std-dev of the fitted lockout costs (0.1 = +/-10%)
     costs: list = field(default_factory=list)
+    source: str = "lockouts"  # where the session limit came from: lockouts, claude.ai or config
 
 
 def lockout_samples(calls: list[Call], lockouts: list[Lockout]) -> list[Sample]:
@@ -169,6 +170,18 @@ def fit(samples: list[Sample], prices: dict, now: float, fixed_mult: dict | None
 
 # ---------------------------------------------------------------- status
 
+WEEK = 7 * 86400
+FABLE_PREFIX = "claude-fable"
+
+
+@dataclass
+class Weekly:
+    """A weekly limit. pct stays None until it is matched to a claude.ai reading."""
+    reset_at: float
+    cost: float = 0.0
+    pct: float | None = None
+
+
 @dataclass
 class Status:
     pct: float = 0.0
@@ -178,13 +191,22 @@ class Status:
     window_tokens: dict = field(default_factory=lambda: dict.fromkeys(CATEGORIES, 0))
     window_cost: float = 0.0
     today_tokens: int = 0
-    live_context: int = 0
-    live_folder: str = ""
+    live: list = field(default_factory=list)  # [(folder, context tokens)], largest first
+    week: Weekly | None = None
+    fable: Weekly | None = None
     calibration: Calibration = field(default_factory=Calibration)
 
     @property
     def window_total(self) -> int:
         return sum(self.window_tokens.values())
+
+    @property
+    def live_context(self) -> int:
+        return self.live[0][1] if self.live else 0
+
+    @property
+    def live_folder(self) -> str:
+        return self.live[0][0] if self.live else ""
 
 
 def local_midnight(now: float, tz) -> float:
@@ -192,14 +214,37 @@ def local_midnight(now: float, tz) -> float:
     return d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
+def week_start(now: float, tz=None, weekday: int = 0, hour: int = 8) -> float:
+    """Most recent weekly reset at or before now (weekday 0 = Monday, local time)."""
+    d = datetime.fromtimestamp(now, tz)
+    day = d.date() - timedelta(days=(d.weekday() - weekday) % 7)
+    start = datetime.combine(day, time(hour), tzinfo=d.tzinfo).timestamp()
+    if start > now:  # it is the reset weekday, before the reset hour
+        start = datetime.combine(day - timedelta(days=7), time(hour), tzinfo=d.tzinfo).timestamp()
+    return start
+
+
+def limit_from_reading(cost: float, pct: float) -> float | None:
+    """Turn a claude.ai reading (pct of a limit, with our cost at that moment) into a limit."""
+    if pct is None or pct < 3 or cost <= 0:
+        return None  # too little usage to scale from reliably
+    return cost / (pct / 100)
+
+
+def window_calls(calls: list[Call], start: float, now: float, model_prefix: str = "") -> list[Call]:
+    return [c for c in calls if start <= c.ts <= now and c.model.startswith(model_prefix)]
+
+
 def compute_status(calls: list[Call], lockouts: list[Lockout], cal: Calibration, prices: dict,
-                   now: float, tz=None, live_minutes: int = 30) -> Status:
+                   now: float, tz=None, live_minutes: int = 30, week_limits: dict | None = None,
+                   week_reset: tuple = (0, 8)) -> Status:
     calls = sorted(calls, key=lambda c: c.ts)
     st = Status(calibration=cal)
+    cost = lambda cs: weighted(features(model_tokens(cs), prices), cal.mult)
 
     # Locked out: a rejection whose reset is still ahead, with no successful call since.
     for lk in sorted(lockouts, key=lambda lk: lk.resets_at, reverse=True):
-        if lk.resets_at > now and not any(c.ts > lk.last_ts for c in calls):
+        if lk.ts <= now < lk.resets_at and not any(lk.last_ts < c.ts <= now for c in calls):
             st.locked, st.pct = True, 100.0
             st.window_start, st.reset_at = lk.resets_at - WINDOW, lk.resets_at
             break
@@ -209,13 +254,22 @@ def compute_status(calls: list[Call], lockouts: list[Lockout], cal: Calibration,
         if win:
             st.window_start, st.reset_at = win
     if st.window_start is not None:
-        in_win = [c for c in calls if st.window_start <= c.ts <= now]
+        in_win = window_calls(calls, st.window_start, now)
         for c in in_win:
             for k in CATEGORIES:
                 st.window_tokens[k] += getattr(c, k)
-        st.window_cost = weighted(features(model_tokens(in_win), prices), cal.mult)
+        st.window_cost = cost(in_win)
         if not st.locked:
             st.pct = st.window_cost / cal.limit * 100 if cal.limit else 0.0
+
+    # Weekly limits: cost since the weekly reset, scaled by the limit from a claude.ai reading.
+    week_limits = week_limits or {}
+    start = week_start(now, tz, *week_reset)
+    for name, prefix in (("week", ""), ("fable", FABLE_PREFIX)):
+        w = Weekly(reset_at=start + WEEK, cost=cost(window_calls(calls, start, now, prefix)))
+        if week_limits.get(name):
+            w.pct = w.cost / week_limits[name] * 100
+        setattr(st, name, w)
 
     midnight = local_midnight(now, tz)
     st.today_tokens = sum(c.tokens for c in calls if c.ts >= midnight)
@@ -224,10 +278,8 @@ def compute_status(calls: list[Call], lockouts: list[Lockout], cal: Calibration,
     for c in calls:
         if c.ts >= now - live_minutes * 60:
             latest[c.file] = c  # calls are sorted, so this ends on each file's last call
-    if latest:
-        top = max(latest.values(), key=lambda c: c.context)
-        st.live_context = top.context
-        st.live_folder = os.path.basename(top.cwd.rstrip("\\/")) or Path(top.file).parent.name
+    st.live = sorted(((os.path.basename(c.cwd.rstrip("\\/")) or Path(c.file).parent.name, c.context)
+                      for c in latest.values()), key=lambda x: -x[1])
     return st
 
 
@@ -250,8 +302,12 @@ def fmt_clock(ts: float | None, tz=None) -> str:
     return datetime.fromtimestamp(ts, tz).strftime("%H:%M") if ts else "--:--"
 
 
+def fmt_weekly_reset(ts: float, tz=None) -> str:
+    return datetime.fromtimestamp(ts, tz).strftime("%A %H:%M")
+
+
 def tooltip(st: Status, now: float, tz=None) -> str:
-    """Three short lines; Windows caps tray tooltips at 127 characters."""
+    """Plain-text fallback when the hover card is off; Windows caps it at 127 characters."""
     if st.locked:
         head = f"Claude LOCKED, resets {fmt_clock(st.reset_at, tz)} (in {fmt_duration(st.reset_at - now)})"
     elif st.reset_at:
@@ -263,25 +319,3 @@ def tooltip(st: Status, now: float, tz=None) -> str:
         lines.append(f"Ctx {fmt_tokens(st.live_context)} {st.live_folder}")
     text = "\n".join(lines)
     return text if len(text) <= 127 else text[:126] + "…"
-
-
-def details(st: Status, now: float, tz=None) -> list[tuple[str, str]]:
-    cal = st.calibration
-    w = st.window_tokens
-    rows = [
-        ("Estimated usage", "LOCKED OUT" if st.locked else f"~{st.pct:.0f}%"),
-        ("Window started", fmt_clock(st.window_start, tz)),
-        ("Resets", f"{fmt_clock(st.reset_at, tz)}" + (f" (in {fmt_duration(st.reset_at - now)})" if st.reset_at else "")),
-        ("Output tokens", fmt_tokens(w["output"])),
-        ("Input + cache write", fmt_tokens(w["input"] + w["cache_write"])),
-        ("Cache read", fmt_tokens(w["cache_read"])),
-        ("Weighted cost", f"{st.window_cost:.1f} of {cal.limit:.1f}"),
-        ("Today total", f"{fmt_tokens(st.today_tokens)} tokens"),
-        ("Largest live context", f"{fmt_tokens(st.live_context)} {st.live_folder}" if st.live_context else "none"),
-        ("Calibration", f"{cal.samples} lockouts, spread ±{cal.spread * 100:.0f}%" if cal.samples else "default (no lockouts yet)"),
-        ("Multipliers", ", ".join(f"{k} {v:g}" for k, v in cal.mult.items())),
-    ]
-    if cal.costs:
-        rows.append(("Lockouts at (% of fit)", ", ".join(f"{c:.0f}" for c in cal.costs)))
-    return rows
-

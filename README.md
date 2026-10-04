@@ -3,8 +3,8 @@
 Windows tray icon showing Claude usage against the 5-hour limit.
 
 A ring in the notification area fills up with the **estimated** share of the
-current 5-hour window: green below 60%, yellow 60–85%, red above 85%. When
-you are locked out it turns into a purple disc showing the time until reset.
+current 5-hour window: green below 60%, yellow 60-85%, red above 85%. When
+you are locked out it turns into a solid red disc showing the time until reset.
 
 Everything is computed locally from Claude Code's transcripts. No network
 access and no API keys. `~/.claude` is only ever read.
@@ -16,22 +16,40 @@ py -m pip install -r requirements.txt
 pyw usage_tray.pyw          # pythonw: no console window
 ```
 
-Right-click the icon to use the menu: **Refresh now**, **Details…**
-(double-click also opens it), **Start with Windows** (a per-user `Run`
+Rest the pointer on the icon to see the usage card. Left-click pins it, and
+clicking the card opens the details window. Right-click for the menu:
+**Refresh now**, **Details…**, **Start with Windows** (a per-user `Run`
 registry entry) and **Quit**. Only one instance runs at a time.
+
+Windows 11 hides new tray icons behind the `^` arrow. To keep it on the
+taskbar, open Settings > Personalization > Taskbar > Other system tray icons
+and turn on the Python (pythonw.exe) entry.
 
 Tests: `py -m pip install pytest` then `py -m pytest`.
 
 ## What it shows
 
-- **Tooltip** (three lines, because Windows caps tooltips at 127 characters):
-  - the estimated % and the reset time (Europe/Brussels)
-  - tokens used in this window and today
-  - the largest live conversation context with its folder. That is the
-    latest prompt size (input + cache read + cache write) of conversations
-    that made a call in the last 30 minutes. Subagents count separately.
-- **Details window**: window start and reset, the token breakdown, the
-  weighted cost against the fitted limit, and the calibration quality.
+The usage card and the details window follow the layout of claude.ai's usage
+page (mockup `mockups/details-a-rows.html`), one row per limit:
+
+- **Current session**: the estimated % of the 5-hour window and when it resets.
+- **This week** and **Fable this week**: weekly limits, reset Monday 08:00.
+  These never appear in the logs, so they show "Not set" until you match them
+  once to claude.ai (see below).
+- The largest live conversation context (latest prompt size of conversations
+  active in the last 30 minutes) with its folder.
+
+The details window adds the token breakdown for this session, today's total,
+the live conversations, and "How these numbers are estimated".
+
+### Matching claude.ai
+
+Open Details, expand "How these numbers are estimated", type the percentages
+claude.ai's usage page shows, and click **Match claude.ai**. The app stores the
+limit that makes its own weighted cost equal that percentage, and scales from
+there. For the weekly and Fable limits this is the only source. For the
+session it replaces the lockout fit, which is rough (see below). Readings need
+at least 3% used. Match again whenever the numbers drift.
 
 ## How the estimate works
 
@@ -79,6 +97,8 @@ Optional: `%LOCALAPPDATA%\usage-tray\config.json`, for example
   "multipliers": {"output": 1, "cache_read": 0.5, "cache_write": 1},
   "limit": null,
   "exclude_lockouts": [1791061800],
+  "week_reset": [0, 8],
+  "hover_card": true,
   "prices": {"claude-opus-5-5": {"input": 4, "output": 20, "cache_read": 0.2, "cache_write": 8}}
 }
 ```
@@ -89,9 +109,11 @@ Optional: `%LOCALAPPDATA%\usage-tray\config.json`, for example
   account. Use their `resetsAt` values.
 - `prices` are in $ per million tokens, matched by the longest model-name
   prefix.
+- `week_reset` is the weekday (0 = Monday) and hour when weekly limits reset.
+- `hover_card: false` brings back the plain Windows tooltip.
 
-The same folder holds `lockouts.json` (saved calibration data) and
-`usage-tray.log`.
+The same folder holds `lockouts.json` (lockout calibration data),
+`readings.json` (claude.ai readings) and `usage-tray.log`.
 
 ## Layout
 
@@ -99,10 +121,11 @@ The same folder holds `lockouts.json` (saved calibration data) and
 usage_tray.pyw          entry point
 usage_tray/parser.py    incremental jsonl reader (calls, lockouts)
 usage_tray/estimator.py windows, weighted cost, fit, tooltip/details text
-usage_tray/app.py       Monitor (refresh loop) and the pystray/Tk UI
+usage_tray/app.py       Monitor (refresh loop, claude.ai matching) and the tray icon
+usage_tray/ui.py        hover card and details window (Tk), tray icon position
 usage_tray/icon.py      ring and lockout icons (Pillow)
 usage_tray/config.py    config.json and saved lockouts
 usage_tray/autostart.py Start-with-Windows toggle
 tests/                  parser and estimator tests on fixture jsonl
-mockups/                design mockups (option A, the ring, was chosen)
+mockups/                design mockups (chosen: a-ring icon, details-a-rows window)
 ```
