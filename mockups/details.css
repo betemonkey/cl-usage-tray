@@ -1,0 +1,86 @@
+/* Shared tokens for the details/flyout mockups. Windows 11 Fluent look, recreated by hand
+   (the real window is Tk, so this is an approximation of Fluent, not the official package). */
+:root {
+  --page: #f3f3f3; --page-ink: #1c1c1c; --page-muted: #5d5d5d;
+  --surface: #f9f9f9; --surface-2: #ffffff; --stroke: rgba(0,0,0,.08);
+  --ink: #1b1b1b; --ink-2: #5c5c5c; --ink-3: #8a8a8a;
+  --shadow: 0 8px 28px rgba(40,40,60,.16), 0 1px 3px rgba(40,40,60,.10);
+  /* status palette (dataviz reference instance): severity only, always paired with a label */
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+  --good-track: #d3ecd3; --warn-track: #fbe9c1; --crit-track: #f3d0d0; --idle-track: #e3e3e3;
+  --radius-win: 8px; --radius-ctl: 4px;
+}
+:root[data-theme="dark"] {
+  --page: #141414; --page-ink: #ededed; --page-muted: #a3a3a3;
+  --surface: #202020; --surface-2: #2b2b2b; --stroke: rgba(255,255,255,.08);
+  --ink: #f2f2f2; --ink-2: #c5c5c5; --ink-3: #8f8f8f;
+  --shadow: 0 8px 28px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.4);
+  --good-track: #1f3a1f; --warn-track: #3d3218; --crit-track: #432121; --idle-track: #3a3a3a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px 16px 56px; background: var(--page); color: var(--page-ink);
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; }
+.topbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 20px; font-size: 13px; }
+.topbar a { color: inherit; }
+.topbar a[aria-current] { font-weight: 600; text-decoration: none; }
+.topbar button { margin-left: auto; font: inherit; padding: 4px 10px; border-radius: var(--radius-ctl);
+  border: 1px solid var(--stroke); background: var(--surface-2); color: var(--ink); cursor: pointer; }
+h1 { font-size: 24px; font-weight: 600; margin: 0 0 6px; }
+.lede { color: var(--page-muted); max-width: 68ch; margin: 0 0 4px; }
+h2 { font-size: 16px; font-weight: 600; margin: 32px 0 12px; }
+.note { color: var(--page-muted); font-size: 12.5px; max-width: 68ch; }
+.stage { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+
+/* window chrome */
+.win { background: var(--surface); color: var(--ink); border: 1px solid var(--stroke); border-radius: var(--radius-win);
+  box-shadow: var(--shadow); overflow: hidden; }
+.titlebar { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 0 0 12px;
+  font-size: 12px; color: var(--ink-2); }
+.titlebar .ctl { display: flex; }
+.titlebar .ctl span { width: 46px; height: 32px; display: grid; place-items: center; font-size: 11px; }
+.win .body { padding: 4px 20px 20px; }
+.flyout { width: 340px; }
+.flyout .body { padding: 16px; }
+
+/* rows like claude.ai's usage page */
+.limit { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 0; }
+.limit + .limit { border-top: 1px solid var(--stroke); }
+.limit .name { font-weight: 600; font-size: 13.5px; }
+.limit .val { font-size: 13px; color: var(--ink-2); text-align: right; }
+.limit .sub { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); }
+.limit .bar { grid-column: 1 / -1; margin: 6px 0 2px; }
+.bar { height: 6px; border-radius: 3px; background: var(--idle-track); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 3px; }
+.bar.good { background: var(--good-track); } .bar.good > i { background: var(--good); }
+.bar.warn { background: var(--warn-track); } .bar.warn > i { background: var(--warn); }
+.bar.crit { background: var(--crit-track); } .bar.crit > i { background: var(--crit); }
+.tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: var(--radius-ctl);
+  border: 1px solid var(--stroke); color: var(--ink-2); margin-left: 6px; vertical-align: 1px; font-weight: 400; }
+
+.btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: var(--radius-ctl); border: 1px solid var(--stroke);
+  background: var(--surface-2); color: var(--ink); cursor: pointer; transition: background .15s, transform .1s; }
+.btn:hover { background: var(--idle-track); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.footer { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding-top: 12px;
+  margin-top: 4px; border-top: 1px solid var(--stroke); font-size: 12px; color: var(--ink-3); }
+
+/* small tables of live conversations */
+.live { width: 100%; border-collapse: collapse; font-size: 13px; }
+.live td { padding: 4px 0; }
+.live td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); width: 64px; }
+.live td.meter { width: 38%; padding-left: 12px; }
+.live .bar { height: 4px; }
+.live .bar > i { background: var(--ink-3); }
+
+.mini-icons { display: flex; gap: 18px; align-items: end; font-size: 11px; color: var(--page-muted); }
+.mini-icons figure { margin: 0; text-align: center; }
+.mini-icons svg { display: block; margin: 0 auto 4px; }
+details.calib summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 8px 0; }
+details.calib p { font-size: 12.5px; color: var(--ink-2); margin: 4px 0 10px; max-width: 60ch; }
+.field { display: grid; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.field input { font: inherit; font-size: 13px; width: 90px; padding: 4px 8px; border-radius: var(--radius-ctl);
+  border: 1px solid var(--stroke); background: var(--surface-2); color: var(--ink); }
+.fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+@media (max-width: 520px) { .flyout, .win { width: 100% !important; } }
