@@ -1,0 +1,52 @@
+:root {
+  --bg: #f3f3f3; --fg: #1b1b1b; --muted: #5f5f5f; --card: #ffffff; --line: #d8d8d8;
+  --taskbar: #202020; --tip-bg: #2b2b2b; --tip-fg: #f2f2f2;
+  --green: #2e9e4f; --yellow: #e0a800; --red: #d13438; --lock: #6b3fa0;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1c1c; --fg: #ececec; --muted: #a0a0a0; --card: #262626; --line: #3a3a3a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg);
+  font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+main { max-width: 980px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 28px 0 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+p.lede { color: var(--muted); margin: 0 0 8px; max-width: 70ch; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: inherit; margin-right: 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.state { text-align: center; }
+.state .label { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.zoom { display: flex; gap: 14px; align-items: end; justify-content: center; }
+.zoom figure { margin: 0; font-size: 11px; color: var(--muted); }
+.zoom svg { display: block; margin: 0 auto 4px; }
+/* real size strip */
+.taskbar { background: var(--taskbar); border-radius: 6px; padding: 8px 12px; display: flex; gap: 10px;
+  align-items: center; justify-content: flex-end; color: #fff; font-size: 12px; }
+.taskbar .clock { margin-left: 8px; text-align: right; line-height: 1.2; }
+.taskbar svg { width: 16px; height: 16px; }
+.taskbar .other { width: 16px; height: 16px; border-radius: 3px; background: #555; }
+/* tooltip + menu */
+.popups { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.tooltip { background: var(--tip-bg); color: var(--tip-fg); border: 1px solid #444; border-radius: 6px;
+  padding: 8px 10px; font-size: 12px; white-space: pre; font-family: "Segoe UI", sans-serif;
+  display: inline-block; box-shadow: 0 6px 18px rgba(0,0,0,.35); max-width: 100%; overflow-x: auto; }
+.menu { background: #2b2b2b; color: #f2f2f2; border: 1px solid #444; border-radius: 8px; padding: 4px;
+  width: 240px; font-size: 13px; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+.menu div { padding: 6px 10px 6px 30px; border-radius: 4px; position: relative; }
+.menu div.hover { background: #3d3d3d; }
+.menu div.dim { color: #9a9a9a; }
+.menu div.check::before { content: "✓"; position: absolute; left: 10px; }
+.menu hr { border: 0; border-top: 1px solid #444; margin: 4px 0; }
+.note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+/* details window */
+.details { background: var(--card); border: 1px solid var(--line); border-radius: 8px; max-width: 460px; overflow: hidden; }
+.details .title { padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; display: flex; justify-content: space-between; }
+.details .body { padding: 12px 16px; }
+.details table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.details td { padding: 3px 0; }
+.details td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; margin: 6px 0 12px; }
+.bar span { display: block; height: 100%; }
