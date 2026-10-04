@@ -25,6 +25,8 @@ DEFAULTS = {
     "exclude_lockouts": [],     # resetsAt values (unix seconds) to leave out of the fit
     "week_reset": [0, 8],       # weekly limits reset on this weekday (0 = Monday) and hour, local time
     "hover_card": True,         # false = plain Windows tooltip instead of the hover card
+    "live_api": True,           # exact numbers from Anthropic's usage endpoint (needs network and the Claude Code login)
+    "api_seconds": 120,         # how often to ask it
 }
 
 

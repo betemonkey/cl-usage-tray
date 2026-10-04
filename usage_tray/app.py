@@ -5,13 +5,15 @@ import logging
 import threading
 import time
 
-from . import autostart, estimator as est
+from . import autostart, estimator as est, live
 from .config import (APP_DIR, load_config, load_readings, load_samples, save_readings,
                      save_samples)
 from .parser import LogStore
 
 log = logging.getLogger("usage-tray")
 KEEP_DAYS = 8  # keep a full weekly window of calls in memory
+AUTO_MATCH_MIN_PCT = 20     # live readings below this are too coarse (whole %) to calibrate from
+AUTO_MATCH_EVERY = 30 * 60  # and recalibrating more often than this only adds noise
 
 
 def get_tz(name: str):
@@ -39,10 +41,32 @@ class Monitor:
         self.status = est.Status()
         self.updated = 0.0
         self.lock = threading.Lock()
+        self.exact: live.LiveUsage | None = None  # last good reading from Anthropic's usage endpoint
+        self.exact_error: str | None = None
+        self.next_fetch = 0.0
+
+    def _fetch_live(self, now: float) -> None:
+        """Ask Anthropic for the exact numbers every api_seconds (outside the lock: it can take seconds)."""
+        if not self.cfg["live_api"] or now < self.next_fetch:
+            return
+        interval = self.cfg["api_seconds"]
+        try:
+            self.exact, self.exact_error = live.get_usage(now), None
+        except live.LiveError as e:
+            self.exact_error = str(e)
+            if "rate limiting" in self.exact_error:
+                interval *= 4
+            log.info("live usage unavailable: %s", e)
+        self.next_fetch = now + interval
+
+    def _exact_fresh(self, now: float):
+        stale_after = max(3 * self.cfg["api_seconds"], 600)
+        return self.exact if self.exact and now - self.exact.fetched_at < stale_after else None
 
     def refresh(self, now: float | None = None) -> est.Status:
+        now = now or time.time()
+        self._fetch_live(now)
         with self.lock:
-            now = now or time.time()
             # The first scan reads all history (about 2 s) to find old lockouts; later polls are incremental.
             since = now - self.cfg["recent_hours"] * 3600 if self.scanned else 0
             self.store.poll(since)
@@ -52,9 +76,24 @@ class Monitor:
             self._update_samples(calls, lockouts)
             self.complete_since = now - KEEP_DAYS * 86400
             self.store.prune(self.complete_since)
+            self._auto_match(calls, lockouts, now)
             self.status = self._compute(calls, lockouts, now)
             self.updated = now
             return self.status
+
+    def _auto_match(self, calls, lockouts, now) -> None:
+        """Keep the offline estimate calibrated from live readings, so it is close when live data is gone."""
+        exact = self._exact_fresh(now)
+        if not exact or exact.fetched_at != now:
+            return
+        fable = next((w for w in exact.weekly if w.name.startswith("Fable")), None)
+        week = next((w for w in exact.weekly if w.name == "This week"), None)
+        wanted = {"session": exact.session, "week": week, "fable": fable}
+        values = {k: l.pct for k, l in wanted.items()
+                  if l and l.pct >= AUTO_MATCH_MIN_PCT and l.pct < 100
+                  and now - self.readings.get(k, {}).get("at", 0) >= AUTO_MATCH_EVERY}
+        if values:
+            self._match(values, calls, lockouts, now)
 
     def _calibration(self, now: float) -> est.Calibration:
         excluded = {float(x) for x in self.cfg["exclude_lockouts"]}
@@ -70,28 +109,41 @@ class Monitor:
     def _compute(self, calls, lockouts, now) -> est.Status:
         week_limits = {k: self.readings[k]["limit"] for k in ("week", "fable")
                        if self.readings.get(k, {}).get("limit")}
-        return est.compute_status(calls, lockouts, self._calibration(now), self.cfg["prices"], now,
-                                  self.tz, self.cfg["live_minutes"], week_limits,
-                                  tuple(self.cfg["week_reset"]))
+        st = est.compute_status(calls, lockouts, self._calibration(now), self.cfg["prices"], now,
+                                self.tz, self.cfg["live_minutes"], week_limits,
+                                tuple(self.cfg["week_reset"]))
+        st.exact, st.exact_error = self._exact_fresh(now), self.exact_error
+        if st.exact and st.exact.session:  # exact numbers win over the estimate for icon and card
+            s = st.exact.session
+            st.pct, st.locked = s.pct, s.pct >= 100
+            if s.resets_at:
+                st.reset_at, st.window_start = s.resets_at, s.resets_at - est.WINDOW
+        return st
 
     def match(self, session: float | None, week: float | None, fable: float | None,
               now: float | None = None) -> list[str]:
         """Store claude.ai readings (percentages) as limits. Returns the names that were set."""
         with self.lock:
             now = now or time.time()
-            st = self._compute(self.store.sorted_calls(), list(self.store.lockouts.values()), now)
-            # Readings scale our weighted cost, which uses the current multipliers.
-            costs = {"session": st.window_cost, "week": st.week.cost, "fable": st.fable.cost}
-            done = []
-            for name, pct in (("session", session), ("week", week), ("fable", fable)):
-                limit = est.limit_from_reading(costs[name], pct)
-                if limit:
-                    self.readings[name] = {"limit": limit, "pct": pct, "at": now}
-                    done.append(name)
-            if done and self.persist:
-                save_readings(self.readings)
-            self.status = self._compute(self.store.sorted_calls(), list(self.store.lockouts.values()), now)
+            calls, lockouts = self.store.sorted_calls(), list(self.store.lockouts.values())
+            values = {k: v for k, v in (("session", session), ("week", week), ("fable", fable)) if v is not None}
+            done = self._match(values, calls, lockouts, now)
+            self.status = self._compute(calls, lockouts, now)
             return done
+
+    def _match(self, values: dict, calls, lockouts, now) -> list[str]:
+        st = self._compute(calls, lockouts, now)
+        # Readings scale our weighted cost, which uses the current multipliers.
+        costs = {"session": st.window_cost, "week": st.week.cost, "fable": st.fable.cost}
+        done = []
+        for name in ("session", "week", "fable"):
+            limit = est.limit_from_reading(costs[name], values.get(name))
+            if limit:
+                self.readings[name] = {"limit": limit, "pct": values[name], "at": now}
+                done.append(name)
+        if done and self.persist:
+            save_readings(self.readings)
+        return done
 
     def _update_samples(self, calls, lockouts) -> None:
         changed = False

@@ -6,8 +6,18 @@ A ring in the notification area fills up with the **estimated** share of the
 current 5-hour window: green below 60%, yellow 60-85%, red above 85%. When
 you are locked out it turns into a solid red disc showing the time until reset.
 
-Everything is computed locally from Claude Code's transcripts. No network
-access and no API keys. `~/.claude` is only ever read.
+The numbers come from Anthropic's usage endpoint, the one behind Claude Code's
+`/usage` screen (the same approach as clippyred). They are exact: session,
+this week, per-model weekly limits such as Fable, and cloud session credits.
+The tray reads the Claude Code login token from `~/.claude/.credentials.json`
+and sends it only to `api.anthropic.com`, every 2 minutes. It never refreshes
+or writes the token: Claude Code renews it whenever you use it. The endpoint is
+undocumented and may change.
+
+When live data is unavailable (offline, login expired, endpoint changed), the
+tray falls back to estimating from the local transcripts, described below. Each
+live reading also recalibrates that estimate, so the fallback stays close.
+`~/.claude` is only ever read. Set `"live_api": false` to stay fully offline.
 
 ## Setup
 
@@ -33,9 +43,10 @@ The usage card and the details window follow the layout of claude.ai's usage
 page (mockup `mockups/details-a-rows.html`), one row per limit:
 
 - **Current session**: the estimated % of the 5-hour window and when it resets.
-- **This week** and **Fable this week**: weekly limits, reset Monday 08:00.
-  These never appear in the logs, so they show "Not set" until you match them
-  once to claude.ai (see below).
+- **This week** and per-model weekly limits such as **Fable this week**.
+- **Cloud session credits**: dollars left and when they expire.
+- Offline, the weekly rows come from the estimate and show "Not set" until
+  calibrated (automatically from live readings, or by hand, see below).
 - The largest live conversation context (latest prompt size of conversations
   active in the last 30 minutes) with its folder.
 
@@ -44,7 +55,8 @@ the live conversations, and "How these numbers are estimated".
 
 ### Matching claude.ai
 
-Open Details, expand "How these numbers are estimated", type the percentages
+Only needed when live data stays unavailable. Open Details, expand "Where
+these numbers come from", type the percentages
 claude.ai's usage page shows, and click **Match claude.ai**. The app stores the
 limit that makes its own weighted cost equal that percentage, and scales from
 there. For the weekly and Fable limits this is the only source. For the
@@ -99,6 +111,8 @@ Optional: `%LOCALAPPDATA%\usage-tray\config.json`, for example
   "exclude_lockouts": [1791061800],
   "week_reset": [0, 8],
   "hover_card": true,
+  "live_api": true,
+  "api_seconds": 120,
   "prices": {"claude-opus-5-5": {"input": 4, "output": 20, "cache_read": 0.2, "cache_write": 8}}
 }
 ```
@@ -111,6 +125,8 @@ Optional: `%LOCALAPPDATA%\usage-tray\config.json`, for example
   prefix.
 - `week_reset` is the weekday (0 = Monday) and hour when weekly limits reset.
 - `hover_card: false` brings back the plain Windows tooltip.
+- `live_api: false` turns off the usage endpoint (local estimate only);
+  `api_seconds` sets how often it is asked.
 
 The same folder holds `lockouts.json` (lockout calibration data),
 `readings.json` (claude.ai readings) and `usage-tray.log`.
@@ -123,6 +139,7 @@ usage_tray/parser.py    incremental jsonl reader (calls, lockouts)
 usage_tray/estimator.py windows, weighted cost, fit, tooltip/details text
 usage_tray/app.py       Monitor (refresh loop, claude.ai matching) and the tray icon
 usage_tray/ui.py        hover card and details window (Tk), tray icon position
+usage_tray/live.py      exact numbers from Anthropic's usage endpoint
 usage_tray/icon.py      ring and lockout icons (Pillow)
 usage_tray/config.py    config.json and saved lockouts
 usage_tray/autostart.py Start-with-Windows toggle

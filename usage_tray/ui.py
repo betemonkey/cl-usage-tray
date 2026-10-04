@@ -45,6 +45,20 @@ def limit_rows(st: est.Status, now: float, tz=None, yellow_at: float = 60, red_a
     else:
         session = dict(pct=0, value="0% used", sev="good", sub="No session running. Your next message starts one.")
     rows = [dict(name="Current session", **session)]
+
+    if st.exact:  # exact numbers from Anthropic
+        for w in st.exact.weekly:
+            reset = est.fmt_weekly_reset(w.resets_at, tz) if w.resets_at else "?"
+            model = w.name[:-len(" this week")] if w.name.endswith(" this week") else ""
+            sub = f"Separate {model} limit, resets {reset}" if model else f"Resets {reset}"
+            rows.append(dict(name=w.name, pct=w.pct, value=f"{w.pct:.0f}% used", sev=sev(w.pct), sub=sub))
+        c = st.exact.credit
+        if c:
+            expires = datetime.fromtimestamp(c.resets_at, tz).strftime("%d %b %H:%M") if c.resets_at else "?"
+            rows.append(dict(name="Cloud session credits", pct=c.used / c.limit * 100, sev="neutral",
+                             value=f"${c.left:.0f} of ${c.limit:.0f} left", sub=f"Expires {expires}"))
+        return rows
+
     for name, label, extra in (("week", "This week", ""), ("fable", "Fable this week", "Separate Fable limit, ")):
         w = getattr(st, name)
         if w is None:
@@ -60,10 +74,15 @@ def limit_rows(st: est.Status, now: float, tz=None, yellow_at: float = 60, red_a
 
 
 def calibration_text(st: est.Status, tz=None, readings: dict | None = None) -> str:
+    if st.exact:
+        return ("These numbers come straight from Anthropic's usage endpoint, the one behind Claude Code's "
+                "/usage screen. The local estimate is only the fallback when it can't be reached, and it "
+                "recalibrates itself from these readings. You only need the fields below if live data stays "
+                "unavailable.")
     cal = st.calibration
     if cal.source == "claude.ai" and readings and readings.get("session"):
         when = datetime.fromtimestamp(readings["session"]["at"], tz).strftime("%d %b %H:%M")
-        session = f"The session limit was matched to claude.ai on {when}."
+        session = f"The session limit was last matched on {when}."
     elif cal.source == "config":
         session = "The session limit is set in config.json."
     elif cal.samples:
@@ -71,9 +90,15 @@ def calibration_text(st: est.Status, tz=None, readings: dict | None = None) -> s
                    f"(they agree within about {cal.spread * 100:.0f}%).")
     else:
         session = "No lockouts logged yet, so the session limit is a default guess."
-    return ("The logs do not contain the real plan percentages. " + session + " Weekly and Fable limits never "
-            "appear in the logs, so they need a reading from claude.ai: type what its usage page shows and "
-            "the app scales from there. Matching the session too makes it more accurate.")
+    why = f"Live data is unavailable ({st.exact_error}), so these are estimates. " if st.exact_error else ""
+    return (why + session + " Weekly and Fable limits never appear in the logs, so they need a reading from "
+            "claude.ai: type what its usage page shows and the app scales from there.")
+
+
+def footer_text(st: est.Status, updated: float, tz, poll_seconds: int, api_seconds: int) -> str:
+    if st.exact:
+        return f"Live from Anthropic at {est.fmt_clock(st.exact.fetched_at, tz)}, every {api_seconds // 60} min"
+    return f"Estimate, updated {est.fmt_clock(updated, tz)}, every {poll_seconds} s"
 
 
 # ---------------------------------------------------------------- Windows helpers
@@ -135,16 +160,28 @@ def system_theme() -> str:
         return "dark"
 
 
-def style_window(win, dark: bool) -> None:
-    """Windows 11 rounded corners and a title bar that follows the theme. Ignored elsewhere."""
+def _colorref(hex_color: str) -> int:
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return r | g << 8 | b << 16
+
+
+def style_window(win, dark: bool, border: str | None = None) -> bool:
+    """Windows 11 rounded corners, a theme-matching title bar and, for borderless windows, a 1px
+    border that follows the rounded shape. Call after the window is shown. False if not applied."""
     try:
-        hwnd = int(win.wm_frame(), 16)
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetAncestor(win.winfo_id(), 2)  # GA_ROOT: the real top-level window
         dwm = ctypes.windll.dwmapi
-        for attr, value in ((20, int(dark)), (33, 2)):  # IMMERSIVE_DARK_MODE, WINDOW_CORNER_PREFERENCE=ROUND
-            v = ctypes.c_int(value)
-            dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+        attrs = [(20, int(dark)), (33, 2)]  # IMMERSIVE_DARK_MODE, WINDOW_CORNER_PREFERENCE = ROUND
+        if border:
+            attrs.append((34, _colorref(border)))  # BORDER_COLOR
+        ok = True
+        for attr, value in attrs:
+            v = ctypes.c_uint(value)
+            ok &= dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v)) == 0
+        return ok
     except Exception:
-        pass
+        return False
 
 
 # ---------------------------------------------------------------- the UI thread
@@ -261,6 +298,8 @@ class UI(threading.Thread):
         h = self.px(height)
         cv = self.tk.Canvas(parent, width=width, height=h, bg=p["surface"], highlightthickness=0, bd=0)
         r = h / 2
+        if sev == "neutral":
+            fill, track = fill or p["ink2"], track or p["idle"]
         track = track or (p["track"][sev] if pct is not None else p["idle"])
         cv.create_line(r, r, width - r, r, fill=track, width=h, capstyle="round")
         if pct:
@@ -294,18 +333,17 @@ class UI(threading.Thread):
         if self.card is None:
             self.pal = self._pal()
             tk = self.tk
-            self.card = tk.Toplevel(self.root, bg=self.pal["surface"], highlightthickness=1,
-                                    highlightbackground=self.pal["stroke"])
+            self.card = tk.Toplevel(self.root, bg=self.pal["surface"])
             self.card.overrideredirect(True)
             self.card.attributes("-topmost", True)
             self.card_body = tk.Frame(self.card, bg=self.pal["surface"])
             self.card_body.pack(fill="both", padx=self.px(16), pady=(self.px(14), self.px(12)))
             self._fill_card()
-            style_window(self.card, system_theme() == "dark")
         self.pinned = pinned
         self.away_since = None
         self._place_card()
         self.card.deiconify()
+        style_window(self.card, system_theme() == "dark", border=self.pal["stroke"])
 
     def _fill_card(self) -> None:
         for w in self.card_body.winfo_children():
@@ -314,8 +352,11 @@ class UI(threading.Thread):
         head = self.tk.Frame(body, bg=p["surface"])
         head.pack(fill="x", pady=(0, self.px(2)))
         self._label(head, "Claude usage", "head").pack(side="left")
-        self._label(head, " estimate ", "tag", "ink2", highlightthickness=1,
-                    highlightbackground=p["stroke"]).pack(side="right")
+        st = self.monitor.status
+        tag = " estimate " if not st.exact else (f" {st.exact.plan.upper()} " if st.exact.plan else "")
+        if tag:
+            self._label(head, tag, "tag", "ink2", highlightthickness=1,
+                        highlightbackground=p["stroke"]).pack(side="right")
         self._rows(body, self.px(306))
         self.tk.Frame(body, height=1, bg=p["stroke"]).pack(fill="x", pady=(self.px(2), self.px(8)))
         self._live_line(body).pack(fill="x")
@@ -362,7 +403,6 @@ class UI(threading.Thread):
         win.title("Claude usage")
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self._close_details)
-        style_window(win, system_theme() == "dark")
         outer = tk.Frame(win, bg=p["surface"])
         outer.pack(fill="both", padx=self.px(20), pady=(self.px(8), self.px(16)))
         self.d_width = self.px(520)
@@ -377,7 +417,7 @@ class UI(threading.Thread):
         self.d_live.pack(fill="x")
 
         # Calibration expander: built once, so typed values survive refreshes.
-        self.d_calib_btn = tk.Label(outer, text="▸  How these numbers are estimated", font=self.f["body"],
+        self.d_calib_btn = tk.Label(outer, text="▸  Where these numbers come from", font=self.f["body"],
                                     fg=p["ink2"], bg=p["surface"], cursor="hand2", anchor="w")
         self.d_calib_btn.pack(fill="x", pady=(self.px(12), self.px(4)))
         self.d_calib_btn.bind("<Button-1>", lambda e: self._toggle_calib())
@@ -406,6 +446,7 @@ class UI(threading.Thread):
         self.d_updated.pack(side="left")
         self._button(foot, "Refresh", self._refresh_now).pack(side="right")
         self._fill_details()
+        style_window(win, system_theme() == "dark")
 
     def _button(self, parent, text, command):
         p = self.pal
@@ -420,10 +461,10 @@ class UI(threading.Thread):
     def _toggle_calib(self) -> None:
         if self.d_calib.winfo_ismapped():
             self.d_calib.pack_forget()
-            self.d_calib_btn.configure(text="▸  How these numbers are estimated")
+            self.d_calib_btn.configure(text="▸  Where these numbers come from")
         else:
             self.d_calib.pack(fill="x", after=self.d_calib_btn)
-            self.d_calib_btn.configure(text="▾  How these numbers are estimated")
+            self.d_calib_btn.configure(text="▾  Where these numbers come from")
 
     def _fill_details(self) -> None:
         if self.details is None or not self.details.winfo_exists():
@@ -454,8 +495,8 @@ class UI(threading.Thread):
         self.d_live.grid_columnconfigure(0, weight=1)
 
         self.d_calib_text.configure(text=calibration_text(st, tz, self.monitor.readings))
-        every = self.monitor.cfg["poll_seconds"]
-        self.d_updated.configure(text=f"Updated {est.fmt_clock(self.monitor.updated, tz)}, every {every} s")
+        cfg = self.monitor.cfg
+        self.d_updated.configure(text=footer_text(st, self.monitor.updated, tz, cfg["poll_seconds"], cfg["api_seconds"]))
 
     def _match(self) -> None:
         values = {}

@@ -195,6 +195,8 @@ class Status:
     week: Weekly | None = None
     fable: Weekly | None = None
     calibration: Calibration = field(default_factory=Calibration)
+    exact: object = None        # live.LiveUsage when Anthropic's usage endpoint answered recently
+    exact_error: str | None = None
 
     @property
     def window_total(self) -> int:

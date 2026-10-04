@@ -143,7 +143,7 @@ def test_tooltip_is_short_and_labelled_estimate():
 
 def test_monitor_on_fixture_logs(tmp_path):
     shutil.copytree(FIXTURES, tmp_path / "projects")
-    cfg = {**DEFAULTS, "timezone": "UTC"}
+    cfg = {**DEFAULTS, "timezone": "UTC", "live_api": False}
     mon = Monitor(cfg, store=LogStore(tmp_path / "projects"), samples={}, persist=False)
     st = mon.refresh(now=parse_ts("2026-10-04T09:30:00Z"))
     assert st.locked
@@ -187,7 +187,7 @@ def test_weekly_and_fable_pct_from_limits():
 
 def test_monitor_match_sets_limits_from_claude_ai(tmp_path):
     shutil.copytree(FIXTURES, tmp_path / "projects")
-    cfg = {**DEFAULTS, "timezone": "UTC"}
+    cfg = {**DEFAULTS, "timezone": "UTC", "live_api": False}
     mon = Monitor(cfg, store=LogStore(tmp_path / "projects"), samples={}, readings={}, persist=False)
     now = parse_ts("2026-10-04T08:30:00Z")
     mon.refresh(now=now)
