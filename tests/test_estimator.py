@@ -185,17 +185,23 @@ def test_weekly_and_fable_pct_from_limits():
     assert st.week.reset_at == parse_ts("2026-10-05T06:00:00Z")
 
 
-def test_monitor_match_sets_limits_from_claude_ai(tmp_path):
+def test_monitor_auto_calibrates_from_live_reading(tmp_path, monkeypatch):
+    from usage_tray import live
     shutil.copytree(FIXTURES, tmp_path / "projects")
-    cfg = {**DEFAULTS, "timezone": "UTC", "live_api": False}
-    mon = Monitor(cfg, store=LogStore(tmp_path / "projects"), samples={}, readings={}, persist=False)
     now = parse_ts("2026-10-04T08:30:00Z")
-    mon.refresh(now=now)
-    done = mon.match(session=50, week=20, fable=None, now=now)
-    assert done == ["session", "week"]
-    assert mon.status.pct == pytest.approx(50)
-    assert mon.status.week.pct == pytest.approx(20)
-    assert mon.status.calibration.source == "claude.ai"
+    reading = live.LiveUsage(fetched_at=now, session=live.Limit("Current session", 50, None),
+                             weekly=[live.Limit("This week", 20, None)])
+    monkeypatch.setattr(live, "get_usage", lambda now=None: reading)
+    mon = Monitor({**DEFAULTS, "timezone": "UTC"}, store=LogStore(tmp_path / "projects"), samples={},
+                  readings={}, persist=False)
+    st = mon.refresh(now=now)
+    assert st.pct == 50 and st.exact is reading
+    assert set(mon.readings) == {"session", "week"}  # 50% and 20% are both precise enough
+    # With the endpoint gone, the estimate lands where the last reading was.
+    mon.exact, mon.cfg["live_api"] = None, False
+    st = mon.refresh(now=now)
+    assert st.exact is None and st.pct == pytest.approx(50)
+    assert st.week.pct == pytest.approx(20)
 
 
 def test_card_rows():

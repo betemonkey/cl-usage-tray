@@ -120,17 +120,6 @@ class Monitor:
                 st.reset_at, st.window_start = s.resets_at, s.resets_at - est.WINDOW
         return st
 
-    def match(self, session: float | None, week: float | None, fable: float | None,
-              now: float | None = None) -> list[str]:
-        """Store claude.ai readings (percentages) as limits. Returns the names that were set."""
-        with self.lock:
-            now = now or time.time()
-            calls, lockouts = self.store.sorted_calls(), list(self.store.lockouts.values())
-            values = {k: v for k, v in (("session", session), ("week", week), ("fable", fable)) if v is not None}
-            done = self._match(values, calls, lockouts, now)
-            self.status = self._compute(calls, lockouts, now)
-            return done
-
     def _match(self, values: dict, calls, lockouts, now) -> list[str]:
         st = self._compute(calls, lockouts, now)
         # Readings scale our weighted cost, which uses the current multipliers.

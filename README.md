@@ -46,22 +46,12 @@ page (mockup `mockups/details-a-rows.html`), one row per limit:
 - **This week** and per-model weekly limits such as **Fable this week**.
 - **Cloud session credits**: dollars left and when they expire.
 - Offline, the weekly rows come from the estimate and show "Not set" until
-  calibrated (automatically from live readings, or by hand, see below).
+  calibrated from a live reading.
 - The largest live conversation context (latest prompt size of conversations
   active in the last 30 minutes) with its folder.
 
 The details window adds the token breakdown for this session, today's total,
 the live conversations, and "How these numbers are estimated".
-
-### Matching claude.ai
-
-Only needed when live data stays unavailable. Open Details, expand "Where
-these numbers come from", type the percentages
-claude.ai's usage page shows, and click **Match claude.ai**. The app stores the
-limit that makes its own weighted cost equal that percentage, and scales from
-there. For the weekly and Fable limits this is the only source. For the
-session it replaces the lockout fit, which is rough (see below). Readings need
-at least 3% used. Match again whenever the numbers drift.
 
 ## How the estimate works
 

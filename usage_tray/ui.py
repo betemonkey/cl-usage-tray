@@ -66,39 +66,18 @@ def limit_rows(st: est.Status, now: float, tz=None, yellow_at: float = 60, red_a
         reset = est.fmt_weekly_reset(w.reset_at, tz)
         if w.pct is None:
             rows.append(dict(name=label, pct=None, value="Not set", sev="good",
-                             sub="Set it once from claude.ai in Details"))
+                             sub="Waiting for a live reading to calibrate"))
         else:
             sub = f"{extra}resets {reset}" if extra else f"Resets {reset}"
             rows.append(dict(name=label, pct=w.pct, value=f"{w.pct:.0f}% used", sev=sev(w.pct), sub=sub))
     return rows
 
 
-def calibration_text(st: est.Status, tz=None, readings: dict | None = None) -> str:
-    if st.exact:
-        return ("These numbers come straight from Anthropic's usage endpoint, the one behind Claude Code's "
-                "/usage screen. The local estimate is only the fallback when it can't be reached, and it "
-                "recalibrates itself from these readings. You only need the fields below if live data stays "
-                "unavailable.")
-    cal = st.calibration
-    if cal.source == "claude.ai" and readings and readings.get("session"):
-        when = datetime.fromtimestamp(readings["session"]["at"], tz).strftime("%d %b %H:%M")
-        session = f"The session limit was last matched on {when}."
-    elif cal.source == "config":
-        session = "The session limit is set in config.json."
-    elif cal.samples:
-        session = (f"The session limit is fitted from {cal.samples} past lockouts "
-                   f"(they agree within about {cal.spread * 100:.0f}%).")
-    else:
-        session = "No lockouts logged yet, so the session limit is a default guess."
-    why = f"Live data is unavailable ({st.exact_error}), so these are estimates. " if st.exact_error else ""
-    return (why + session + " Weekly and Fable limits never appear in the logs, so they need a reading from "
-            "claude.ai: type what its usage page shows and the app scales from there.")
-
-
 def footer_text(st: est.Status, updated: float, tz, poll_seconds: int, api_seconds: int) -> str:
     if st.exact:
         return f"Live from Anthropic at {est.fmt_clock(st.exact.fetched_at, tz)}, every {api_seconds // 60} min"
-    return f"Estimate, updated {est.fmt_clock(updated, tz)}, every {poll_seconds} s"
+    why = f" ({st.exact_error})" if st.exact_error else ""
+    return f"Estimate{why}, updated {est.fmt_clock(updated, tz)}"
 
 
 # ---------------------------------------------------------------- Windows helpers
@@ -229,7 +208,7 @@ class UI(threading.Thread):
         self.root.destroy()
         # Free every Tk object here; if the main thread frees them, Tcl aborts the process.
         for name, value in list(vars(self).items()):
-            if isinstance(value, tk.Misc) or name == "d_inputs":
+            if isinstance(value, tk.Misc):
                 setattr(self, name, None)
         self.tk = None
         gc.collect()
@@ -416,29 +395,6 @@ class UI(threading.Thread):
         self.d_live = tk.Frame(outer, bg=p["surface"])
         self.d_live.pack(fill="x")
 
-        # Calibration expander: built once, so typed values survive refreshes.
-        self.d_calib_btn = tk.Label(outer, text="▸  Where these numbers come from", font=self.f["body"],
-                                    fg=p["ink2"], bg=p["surface"], cursor="hand2", anchor="w")
-        self.d_calib_btn.pack(fill="x", pady=(self.px(12), self.px(4)))
-        self.d_calib_btn.bind("<Button-1>", lambda e: self._toggle_calib())
-        self.d_calib = tk.Frame(outer, bg=p["surface"])
-        self.d_calib_text = self._label(self.d_calib, "", "small", "ink2", wraplength=self.d_width)
-        self.d_calib_text.pack(fill="x", pady=(0, self.px(8)))
-        fields = tk.Frame(self.d_calib, bg=p["surface"])
-        fields.pack(fill="x")
-        self.d_inputs = {}
-        for key, label in (("session", "Session %"), ("week", "This week %"), ("fable", "Fable week %")):
-            col = tk.Frame(fields, bg=p["surface"])
-            col.pack(side="left", padx=(0, self.px(12)))
-            self._label(col, label, "small", "ink2").pack(anchor="w")
-            e = tk.Entry(col, width=7, font=self.f["body"], bg=p["surface2"], fg=p["ink"], insertbackground=p["ink"],
-                         relief="flat", highlightthickness=1, highlightbackground=p["stroke"], highlightcolor=p["ink3"])
-            e.pack(anchor="w", ipady=self.px(3))
-            self.d_inputs[key] = e
-        self._button(fields, "Match claude.ai", self._match).pack(side="left", anchor="s")
-        self.d_calib_msg = self._label(self.d_calib, "", "small", "ink3")
-        self.d_calib_msg.pack(fill="x", pady=(self.px(6), 0))
-
         tk.Frame(outer, height=1, bg=p["stroke"]).pack(fill="x", pady=(self.px(10), self.px(10)))
         foot = tk.Frame(outer, bg=p["surface"])
         foot.pack(fill="x")
@@ -457,14 +413,6 @@ class UI(threading.Thread):
         b.bind("<Enter>", lambda e: b.configure(bg=p["idle"]))
         b.bind("<Leave>", lambda e: b.configure(bg=p["surface2"]))
         return b
-
-    def _toggle_calib(self) -> None:
-        if self.d_calib.winfo_ismapped():
-            self.d_calib.pack_forget()
-            self.d_calib_btn.configure(text="▸  Where these numbers come from")
-        else:
-            self.d_calib.pack(fill="x", after=self.d_calib_btn)
-            self.d_calib_btn.configure(text="▾  Where these numbers come from")
 
     def _fill_details(self) -> None:
         if self.details is None or not self.details.winfo_exists():
@@ -494,39 +442,8 @@ class UI(threading.Thread):
             self._label(self.d_live, est.fmt_tokens(ctx), "body", "ink2").grid(row=i, column=2, sticky="e")
         self.d_live.grid_columnconfigure(0, weight=1)
 
-        self.d_calib_text.configure(text=calibration_text(st, tz, self.monitor.readings))
         cfg = self.monitor.cfg
         self.d_updated.configure(text=footer_text(st, self.monitor.updated, tz, cfg["poll_seconds"], cfg["api_seconds"]))
-
-    def _match(self) -> None:
-        values = {}
-        for key, entry in self.d_inputs.items():
-            raw = entry.get().strip().rstrip("%")
-            if not raw:
-                continue
-            try:
-                v = float(raw.replace(",", "."))
-            except ValueError:
-                self.d_calib_msg.configure(text=f"'{entry.get()}' is not a number.", fg=STATUS["crit"])
-                return
-            if not 0 <= v <= 100:
-                self.d_calib_msg.configure(text="Percentages go from 0 to 100.", fg=STATUS["crit"])
-                return
-            values[key] = v
-        if not values:
-            self.d_calib_msg.configure(text="Type at least one percentage from claude.ai.", fg=self.pal["ink3"])
-            return
-        done = self.monitor.match(values.get("session"), values.get("week"), values.get("fable"))
-        skipped = [k for k in values if k not in done]
-        msg = f"Matched: {', '.join(done)}." if done else ""
-        if skipped:
-            msg += f" Skipped {', '.join(skipped)}: needs at least 3% used to scale from."
-        self.d_calib_msg.configure(text=msg.strip(), fg=self.pal["ink3"] if done else STATUS["crit"])
-        for key in done:
-            self.d_inputs[key].delete(0, "end")
-        self._fill_details()
-        if self.refresh_cb:  # update the tray icon too
-            threading.Thread(target=self.refresh_cb, daemon=True).start()
 
     def _refresh_now(self) -> None:
         if self.refresh_cb:
