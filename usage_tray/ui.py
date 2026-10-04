@@ -217,7 +217,7 @@ class UI(threading.Thread):
         self.root.destroy()
         # Free every Tk object here; if the main thread frees them, Tcl aborts the process.
         for name, value in list(vars(self).items()):
-            if isinstance(value, tk.Misc):
+            if isinstance(value, (tk.Misc, tk.Image)):
                 setattr(self, name, None)
         self.tk = None
         gc.collect()
@@ -446,6 +446,17 @@ class UI(threading.Thread):
         x, y = place_near(anchor, size, work, self.px(12))
         user32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)  # NOSIZE | NOZORDER | NOACTIVATE
 
+    def _set_window_icon(self) -> None:
+        """Taskbar and title-bar icon: the same ring as the tray, at the current usage."""
+        import base64, io
+        from .icon import lock_icon, ring_icon
+        st, cfg = self.monitor.status, self.monitor.cfg
+        img = lock_icon(st.reset_at - time.time()) if st.locked else ring_icon(st.pct, cfg["yellow_at"], cfg["red_at"])
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        self.d_icon = self.tk.PhotoImage(data=base64.b64encode(buf.getvalue()))  # keep a reference
+        self.details.iconphoto(False, self.d_icon)
+
     def _button(self, parent, text, command):
         p = self.pal
         b = self.tk.Button(parent, text=text, command=command, font=self.f["body"], bg=p["surface2"], fg=p["ink"],
@@ -485,6 +496,7 @@ class UI(threading.Thread):
         self.d_live.grid_columnconfigure(0, weight=1)
 
         cfg = self.monitor.cfg
+        self._set_window_icon()
         self.d_updated.configure(text=footer_text(st, self.monitor.updated, tz, cfg["poll_seconds"], cfg["api_seconds"]))
 
     def _refresh_now(self) -> None:

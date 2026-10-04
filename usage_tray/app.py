@@ -223,6 +223,15 @@ def single_instance() -> bool:
         return True
 
 
+def own_taskbar_identity() -> None:
+    """Every pythonw.exe app would share one taskbar button (and one app's icon) without this."""
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("betemonkey.usage-tray")
+    except Exception:
+        pass
+
+
 def dpi_aware() -> None:
     """Sharp text on scaled displays, and one pixel unit for cursor, tray and Tk positions."""
     try:
@@ -239,4 +248,5 @@ def main() -> None:
     if not single_instance():
         return
     dpi_aware()
+    own_taskbar_identity()
     TrayApp(Monitor(load_config())).run()
