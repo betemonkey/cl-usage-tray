@@ -49,3 +49,13 @@ def test_card_rows_use_live_numbers():
     assert rows[2]["sev"] == "crit" and rows[2]["sub"].startswith("Separate Fable limit, resets Monday")
     assert rows[3]["value"] == "$160 of $250 left" and rows[3]["sev"] == "neutral"
     assert footer_text(st, 0, None, 30, 120).startswith("Live from Anthropic")
+
+
+def test_details_opens_where_the_card_was():
+    from usage_tray.ui import place_near
+    work = (0, 0, 2560, 1380)
+    card = (2100, 900, 2440, 1368)  # card above the tray, bottom-right of the screen
+    assert place_near(card, (720, 760), work) == (2440 - 720, 1368 - 760)  # same right and bottom edge
+    assert place_near(card, (720, 760), work)[0] + 720 <= 2560 - 12
+    assert place_near((2500, 1300, 2560, 1380), (720, 760), work) == (2560 - 720 - 12, 1380 - 760 - 12)  # clamped
+    assert place_near((10, 10, 50, 50), (720, 760), work) == (12, 12)  # never off the top-left either

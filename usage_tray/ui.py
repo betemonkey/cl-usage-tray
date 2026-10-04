@@ -80,6 +80,15 @@ def footer_text(st: est.Status, updated: float, tz, poll_seconds: int, api_secon
     return f"Estimate{why}, updated {est.fmt_clock(updated, tz)}"
 
 
+def place_near(anchor, size, work, gap: int = 12) -> tuple[int, int]:
+    """Top-left for a window of `size` that grows up and left from the anchor's bottom-right corner
+    (where the card was), kept inside the work area."""
+    (al, at, ar, ab), (w, h), (left, top, right, bottom) = anchor, size, work
+    x = min(max(ar - w, left + gap), right - w - gap)
+    y = min(max(ab - h, top + gap), bottom - h - gap)
+    return max(x, left), max(y, top)
+
+
 # ---------------------------------------------------------------- Windows helpers
 
 class _GUID(ctypes.Structure):
@@ -342,7 +351,7 @@ class UI(threading.Thread):
         stack = [body]  # clicking anywhere on the card opens the details
         while stack:
             w = stack.pop()
-            w.bind("<Button-1>", lambda e: (self._hide_card(), self._show_details()))
+            w.bind("<Button-1>", lambda e: self._card_clicked())
             stack.extend(w.winfo_children())
 
     def _place_card(self) -> None:
@@ -362,6 +371,13 @@ class UI(threading.Thread):
         y = min(max(y, top + gap), bottom - h - gap)
         c.geometry(f"+{x}+{y}")
 
+    def _card_clicked(self) -> None:
+        c = self.card
+        anchor = (c.winfo_rootx(), c.winfo_rooty(), c.winfo_rootx() + c.winfo_width(),
+                  c.winfo_rooty() + c.winfo_height())
+        self._hide_card()
+        self._show_details(anchor)
+
     def _hide_card(self) -> None:
         if self.card is not None:
             self.card.destroy()
@@ -370,7 +386,15 @@ class UI(threading.Thread):
 
     # ------------------------------------------------------------ details window
 
-    def _show_details(self) -> None:
+    def _details_anchor(self):
+        """Where the details window opens from when there is no card: the tray icon, else the cursor."""
+        rect = self.icon_rect() if self.icon_rect else None
+        if rect:
+            return rect[0], rect[1] - self.px(12), rect[2], rect[1] - self.px(12)
+        x, y = cursor_pos()
+        return x, y, x, y
+
+    def _show_details(self, anchor=None) -> None:
         if self.details is not None and self.details.winfo_exists():
             self.details.deiconify()
             self.details.lift()
@@ -382,6 +406,7 @@ class UI(threading.Thread):
         win.title("Claude usage")
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self._close_details)
+        win.attributes("-alpha", 0.0)  # build and measure invisibly, then place and show: no jump
         outer = tk.Frame(win, bg=p["surface"])
         outer.pack(fill="both", padx=self.px(20), pady=(self.px(8), self.px(16)))
         self.d_width = self.px(520)
@@ -403,6 +428,23 @@ class UI(threading.Thread):
         self._button(foot, "Refresh", self._refresh_now).pack(side="right")
         self._fill_details()
         style_window(win, system_theme() == "dark")
+        self._place_details(anchor or self._details_anchor())
+        win.attributes("-alpha", 1.0)
+        win.lift()
+        win.focus_force()
+
+    def _place_details(self, anchor) -> None:
+        win = self.details
+        win.update()  # map it now (still invisible), or Windows' default placement wins afterwards
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetAncestor(win.winfo_id(), 2)
+        # Outer size includes the title bar and borders, which Tk's own sizes leave out.
+        r = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        size = (r.right - r.left, r.bottom - r.top)
+        work = work_area((anchor[0] + anchor[2]) // 2, (anchor[1] + anchor[3]) // 2)
+        x, y = place_near(anchor, size, work, self.px(12))
+        user32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)  # NOSIZE | NOZORDER | NOACTIVATE
 
     def _button(self, parent, text, command):
         p = self.pal
