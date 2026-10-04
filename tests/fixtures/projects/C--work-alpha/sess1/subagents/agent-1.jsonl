@@ -1,0 +1,1 @@
+{"type":"assistant","timestamp":"2026-10-04T08:02:00.000Z","isSidechain":true,"message":{"id":"msg_C","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":5,"output_tokens":200,"cache_read_input_tokens":8000,"cache_creation_input_tokens":2000}},"cwd":"C:\\work\\alpha","sessionId":"sess1"}
